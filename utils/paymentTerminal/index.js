@@ -60,6 +60,14 @@ const AGENT_URLS = ['http://localhost:7788', 'http://127.0.0.1:7777']
 // never waiting for the customer.
 const TIMEOUT_MS = 5000
 
+/**
+ * Master switch for the bank-terminal integration (ARCUS / Rahmat). While
+ * false the till never asks the agent about a pinpad and every Uzcard/Humo
+ * sale closes the old way: the cashier charges the card on a standalone
+ * terminal and the tender is typed in. The rest of the code is kept intact.
+ */
+export const PAYMENT_TERMINAL_ENABLED = false
+
 /** Poll interval while an operation is running. */
 export const TERMINAL_POLL_INTERVAL_MS = 1000
 

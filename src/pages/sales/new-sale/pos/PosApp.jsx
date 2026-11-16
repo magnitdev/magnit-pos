@@ -10,6 +10,7 @@ import { playAttentionSound } from '@utils/attentionSound'
 import { extractNumbers, checkBarcodeWithMarking } from '@utils/checkingMarkingWithBarcode'
 import { isLooseWeightLine, markingSlotCount, hasMarkingShape } from '@utils/posLines'
 import {
+  PAYMENT_TERMINAL_ENABLED,
   SCHEME_BY_PROVIDER,
   TERMINAL_PROVIDER,
   providerForScheme,
@@ -538,7 +539,8 @@ export default function PosApp() {
   // payment, whatever the cashier pressed.
   const cardTerminalProvider = isReturnSale ? refundTerminalProvider : providerForScheme(cardPaymentType)
   const cardTerminalScheme = isReturnSale ? refundTerminalScheme : cardPaymentType || ''
-  const cardTerminalAttached = Boolean(cardTerminalProvider && attachedTerminals[cardTerminalProvider])
+  const cardTerminalAttached =
+    PAYMENT_TERMINAL_ENABLED && Boolean(cardTerminalProvider && attachedTerminals[cardTerminalProvider])
 
   const terminalCardAmount = useMemo(
     () => paymentsList.filter((p) => p.type === 'card').reduce((sum, p) => sum + Number(p.amount || 0), 0),
@@ -1231,6 +1233,7 @@ export default function PosApp() {
   // here: for that scheme, leave the card flow exactly as it was before this
   // feature existed.
   useEffect(() => {
+    if (!PAYMENT_TERMINAL_ENABLED) return undefined
     let cancelled = false
     terminalProviders().then((reports) => {
       if (cancelled) return
