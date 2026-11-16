@@ -1239,6 +1239,14 @@ export default function PosApp() {
     submitSale(paymentsList, undefined, maxAmount, cartOwnerType, terminalPayment)
   }
 
+  // The cashier gave up on the terminal and charged the card by hand. This is
+  // the pre-integration flow verbatim — same submit, no terminal payload — so
+  // the sale lands as a plain uzcard/humo tender.
+  const handleTerminalManualClose = () => {
+    setShowTerminalModal(false)
+    submitSale(paymentsList, undefined, maxAmount, cartOwnerType)
+  }
+
   const handleBarcodeScan = async (scannedBarcode) => {
     if (!scannedBarcode) return
 
@@ -2497,6 +2505,7 @@ export default function PosApp() {
         refundReceiptNo={terminalRefundReceiptNo}
         refundAuthCode={terminalRefundAuthCode}
         onDone={handleTerminalApproved}
+        onManualClose={handleTerminalManualClose}
         onCancel={() => { setShowTerminalModal(false); clearPOSActionFocus() }}
         t={t}
       />

@@ -90,6 +90,11 @@ function PosTerminalPaymentModal({
   refundAuthCode = '',
   onDone,
   onCancel,
+  // The cashier's way out when the terminal cannot be made to work: close the
+  // sale exactly as it was closed before the integration existed, with the card
+  // charged (or refunded) on a standalone terminal by hand. Carries NO terminal
+  // payload, so the ERP records an ordinary uzcard/humo tender.
+  onManualClose,
   t,
 }) {
   const [status, setStatus] = useState('starting') // starting | running | approved | declined | failed | unresolved
@@ -103,6 +108,10 @@ function PosTerminalPaymentModal({
   // it does.
   const [cancelStuck, setCancelStuck] = useState(false)
   const [attempt, setAttempt] = useState(0)
+  // The manual close asks once more before it acts: after `failed` the card MAY
+  // have been charged already, and charging it again by hand is the one thing
+  // this button must not make easy.
+  const [confirmingManual, setConfirmingManual] = useState(false)
 
   const onDoneRef = useRef(onDone)
   const doneFiredRef = useRef(false)
@@ -114,6 +123,24 @@ function PosTerminalPaymentModal({
   })
 
   const isRefund = mode === 'refund'
+
+  useEffect(() => {
+    setConfirmingManual(false)
+  }, [open, status, attempt])
+
+  // Every outcome that is not an approval can be closed by hand. `declined`
+  // includes "no terminal on this till / terminal busy / agent unreachable", so
+  // this is what keeps a pinpad that dies mid-shift from stopping card sales.
+  const canCloseManually =
+    Boolean(onManualClose) &&
+    (status === 'declined' || status === 'failed' || status === 'unresolved' || status === 'cancelled')
+
+  const handleManualClose = () => {
+    // The operation is the terminal's business from here; forget our record of
+    // it so re-opening this sale's payment does not try to recover it.
+    writePending(null)
+    onManualClose?.()
+  }
 
   const finish = useCallback(
     (op) => {
@@ -468,10 +495,30 @@ function PosTerminalPaymentModal({
           </div>
         )}
 
+        {canCloseManually && confirmingManual && (
+          <div
+            style={{
+              margin: '4px 0 10px',
+              padding: '12px 14px',
+              borderRadius: 10,
+              background: 'rgba(199, 119, 0, 0.12)',
+              color: '#8a5300',
+              fontSize: 14,
+              lineHeight: 1.35,
+              textAlign: 'center',
+            }}
+          >
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>
+              {isRefund ? t('pos.terminal.manual_refund_confirm_title') : t('pos.terminal.manual_confirm_title')}
+            </div>
+            {isRefund ? t('pos.terminal.manual_refund_confirm_desc') : t('pos.terminal.manual_confirm_desc')}
+          </div>
+        )}
+
         <div className='pos-security-actions'>
           <button
             type='button'
-            onClick={handleCancel}
+            onClick={confirmingManual ? () => setConfirmingManual(false) : handleCancel}
             disabled={cancelling && !cancelStuck}
             className='pos-security-btn-cancel'
           >
@@ -481,15 +528,36 @@ function PosTerminalPaymentModal({
                 ? t('pos.terminal.cancel')
                 : t('pos.security.cancel')}
           </button>
-          {(status === 'declined' || status === 'failed' || status === 'unresolved' || status === 'cancelled') && (
+          {canCloseManually && !confirmingManual && (
             <button
               type='button'
-              onClick={() => setAttempt((n) => n + 1)}
-              className='pos-app-scan-btn-confirm'
+              onClick={() => setConfirmingManual(true)}
+              className='pos-security-btn-cancel'
+              style={{ minHeight: 44 }}
             >
-              {t('retry')}
+              {isRefund ? t('pos.terminal.manual_refund_close') : t('pos.terminal.manual_close')}
             </button>
           )}
+          {canCloseManually && confirmingManual && (
+            <button
+              type='button'
+              onClick={handleManualClose}
+              className='pos-app-scan-btn-confirm'
+              style={{ minHeight: 44 }}
+            >
+              {isRefund ? t('pos.terminal.manual_refund_confirm') : t('pos.terminal.manual_confirm')}
+            </button>
+          )}
+          {(status === 'declined' || status === 'failed' || status === 'unresolved' || status === 'cancelled') &&
+            !confirmingManual && (
+              <button
+                type='button'
+                onClick={() => setAttempt((n) => n + 1)}
+                className='pos-app-scan-btn-confirm'
+              >
+                {t('retry')}
+              </button>
+            )}
         </div>
       </div>
     </div>

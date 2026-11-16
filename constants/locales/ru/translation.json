@@ -1085,5 +1085,13 @@
   "pos.nx.free_count": "{{count}} бесплатно",
   "pos.terminal.receipt_no": "Чек №",
   "pos.terminal.auth_code": "Код авт.",
-  "pos.terminal.close_anyway": "Закрыть окно"
+  "pos.terminal.close_anyway": "Закрыть окно",
+  "pos.terminal.manual_close": "Списано на другом терминале — закрыть продажу",
+  "pos.terminal.manual_confirm_title": "Карта списана на другом терминале?",
+  "pos.terminal.manual_confirm_desc": "Убедитесь по чеку терминала, что вся сумма списана с карты ровно один раз. Возможно, этот терминал уже списал деньги — не списывайте дважды.",
+  "pos.terminal.manual_confirm": "Да, закрыть продажу",
+  "pos.terminal.manual_refund_close": "Возвращено вручную — закрыть возврат",
+  "pos.terminal.manual_refund_confirm_title": "Деньги возвращены на карту вручную?",
+  "pos.terminal.manual_refund_confirm_desc": "Убедитесь по чеку терминала, что сумма возвращена на карту ровно один раз. Возможно, этот терминал уже сделал возврат.",
+  "pos.terminal.manual_refund_confirm": "Да, закрыть возврат"
 }

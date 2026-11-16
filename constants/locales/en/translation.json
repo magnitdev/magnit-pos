@@ -1000,5 +1000,13 @@
   "pos.nx.free_count": "{{count}} free",
   "pos.terminal.receipt_no": "Receipt no.",
   "pos.terminal.auth_code": "Auth code",
-  "pos.terminal.close_anyway": "Close anyway"
+  "pos.terminal.close_anyway": "Close anyway",
+  "pos.terminal.manual_close": "Charged on another terminal — close the sale",
+  "pos.terminal.manual_confirm_title": "Was the card charged on another terminal?",
+  "pos.terminal.manual_confirm_desc": "Check the terminal slip: the full amount must have left the card exactly once. This terminal may already have charged it — never charge twice.",
+  "pos.terminal.manual_confirm": "Yes, close the sale",
+  "pos.terminal.manual_refund_close": "Refunded by hand — close the return",
+  "pos.terminal.manual_refund_confirm_title": "Was the money refunded to the card by hand?",
+  "pos.terminal.manual_refund_confirm_desc": "Check the terminal slip: the amount must have gone back exactly once. This terminal may already have refunded it.",
+  "pos.terminal.manual_refund_confirm": "Yes, close the return"
 }

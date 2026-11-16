@@ -1000,5 +1000,13 @@
   "pos.nx.free_count": "{{count}} dona bepul",
   "pos.terminal.receipt_no": "Chek №",
   "pos.terminal.auth_code": "Avt. kodi",
-  "pos.terminal.close_anyway": "Oynani yopish"
+  "pos.terminal.close_anyway": "Oynani yopish",
+  "pos.terminal.manual_close": "Boshqa terminalda yechildi — sotuvni yopish",
+  "pos.terminal.manual_confirm_title": "Karta boshqa terminalda yechilganmi?",
+  "pos.terminal.manual_confirm_desc": "Kartadan to‘liq summa aynan bir marta yechilganini terminal chekidan tekshiring. Avval shu terminalda pul yechilgan bo‘lishi mumkin — ikki marta yechmang.",
+  "pos.terminal.manual_confirm": "Ha, sotuvni yopish",
+  "pos.terminal.manual_refund_close": "Qo‘lda qaytarildi — qaytarishni yopish",
+  "pos.terminal.manual_refund_confirm_title": "Pul kartaga qo‘lda qaytarilganmi?",
+  "pos.terminal.manual_refund_confirm_desc": "Summa kartaga aynan bir marta qaytarilganini terminal chekidan tekshiring. Avval shu terminalda qaytarilgan bo‘lishi mumkin.",
+  "pos.terminal.manual_refund_confirm": "Ha, qaytarishni yopish"
 }
