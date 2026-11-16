@@ -950,7 +950,13 @@ function CloseShiftPage() {
       } catch (e) {
         // EPOS absent or Z-report not open: nothing to close
       }
-      submitRegister()
+      // No EPOS report to fetch, but the cashier still gets the closing receipt
+      // (cash counts, payment rows, kept/given amounts) from the same template.
+      // Printing closes the register on success; on failure the print-error
+      // screen offers retry / finish without print, which needs `checkdata`.
+      const paylovZrepo = {}
+      setcheckdata(paylovZrepo)
+      handleAgentZReportPrint(paylovZrepo)
       return
     }
     closeZReport({
