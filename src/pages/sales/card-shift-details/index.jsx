@@ -15,6 +15,13 @@ import { error, success } from '@utils/toast'
 import { requests } from '@utils/requests'
 import { usesEposShift } from '@utils/terminalAccess'
 import { buildZReportReceiptLines, useReceiptTemplateSync } from '@utils/receiptTemplate'
+import {
+  SCHEME_BY_PROVIDER,
+  terminalPaymentPayload,
+  terminalProviders,
+  terminalReconciliation,
+  waitForTerminalOperation,
+} from '@utils/paymentTerminal'
 
 const ACCENT = '#111217'
 const DANGER = '#E23A32'
@@ -691,6 +698,63 @@ function CloseShiftPage() {
     },
   })
 
+  // «Сверка итогов» on the bank terminal, run as part of closing so the
+  // cashier never has to do it on the device by hand. Bounded and best effort:
+  // a shift that cannot be closed is a cashier who cannot go home.
+  const TERMINAL_RECONCILIATION_TIMEOUT_MS = 60000
+  // Which pinpads this till has. Both of them take money — Uzcard on ARCUS and
+  // Humo on Rahmat — so closing the shift has to settle each one it finds.
+  const attachedProvidersRef = useRef([])
+  const [isReconciling, setIsReconciling] = useState(false)
+
+  // Asked once, on mount, so the close path adds no latency at all on a till
+  // that has no terminal (most of them, during the rollout).
+  useEffect(() => {
+    let cancelled = false
+    terminalProviders().then((reports) => {
+      if (cancelled) return
+      attachedProvidersRef.current = Object.entries(reports)
+        .filter(([, info]) => info?.detected)
+        .map(([provider]) => provider)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  /**
+   * «Сверка итогов» on every pinpad the till has, one after the other.
+   *
+   * Sequential rather than parallel on purpose: both devices talk through the
+   * same agent, and asking it to run two settlements at once is how you get a
+   * busy error on the second. Each gets its own deadline, and one that does not
+   * answer does not cost the other its сверка — or block the close.
+   */
+  const runTerminalReconciliations = async () => {
+    const providers = attachedProvidersRef.current
+    if (!providers.length) return []
+    setIsReconciling(true)
+    const results = []
+    for (const provider of providers) {
+      try {
+        const scheme = SCHEME_BY_PROVIDER[provider] || ''
+        const started = await terminalReconciliation({ provider, scheme })
+        const deadline = Date.now() + TERMINAL_RECONCILIATION_TIMEOUT_MS
+        const finished = await waitForTerminalOperation({
+          operationId: started?.operation_id,
+          provider,
+          shouldStop: () => Date.now() > deadline,
+        })
+        if (finished) results.push(terminalPaymentPayload(finished, { provider, scheme }))
+      } catch {
+        // That terminal did not answer. The shift closes either way; its
+        // сверка can be run from the devices settings panel afterwards.
+      }
+    }
+    setIsReconciling(false)
+    return results
+  }
+
   const { mutate: closeCashBoxRegister, isLoading: iscloseCashBoxRegister } = useMutation(requests.closeCashBoxRegister, {
     onSuccess: () => {
       setStatus('done')
@@ -704,9 +768,9 @@ function CloseShiftPage() {
     },
   })
 
-  const closing = iscloseZReport || iscloseCheckZReport || iscloseCashBoxRegister
+  const closing = iscloseZReport || iscloseCheckZReport || iscloseCashBoxRegister || isReconciling
 
-  const submitRegister = () => {
+  const submitRegister = async () => {
     const current = stateRef.current
     const counted = parseAmount(current.amounts.actual)
     const keptAmount = current.company === '3' ? parseAmount(current.amounts.closed) : current.company === '2' ? 0 : counted
@@ -714,6 +778,7 @@ function CloseShiftPage() {
       error(t('close_shift.error_kept_exceeds_actual'))
       return
     }
+    const terminalReconciliations = await runTerminalReconciliations()
     closeCashBoxRegister({
       id,
       data: {
@@ -721,6 +786,16 @@ function CloseShiftPage() {
         company_amount: counted - keptAmount,
         close_cashless_amount: current.availableCashless,
         is_company: current.company === '2',
+        // Every settlement this close performed, one per pinpad. The singular
+        // key is kept alongside it for the ERP's existing one-terminal reader
+        // and carries the first result; it goes away once that reader takes
+        // the array.
+        ...(terminalReconciliations.length
+          ? {
+              terminal_reconciliation: terminalReconciliations[0],
+              terminal_reconciliations: terminalReconciliations,
+            }
+          : {}),
       },
     })
   }

@@ -7,6 +7,7 @@ import { useSelector } from 'react-redux'
 import { buildSaleReceiptLines } from '@utils/receiptTemplate'
 import ReceiptPreviewCanvas from '@components/ReceiptPreviewCanvas'
 import PosMertechSettings from './PosMertechSettings'
+import PosTerminalSettings from './PosTerminalSettings'
 import './PosLayout.css'
 
 const AGENT_URL = 'http://localhost:7788'
@@ -662,6 +663,9 @@ export default function PosPrinterSettings({ open, onClose, t }) {
 
           {/* Customer-facing Mertech SBP QR display (independent of the print agent) */}
           <PosMertechSettings t={t} />
+
+          {/* Bank payment terminal (also independent of the print agent) */}
+          <PosTerminalSettings t={t} />
         </div>
       </div>
     </div>
