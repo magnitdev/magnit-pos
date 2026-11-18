@@ -212,7 +212,7 @@ export default function PosApp() {
 
   const {
     data: cartItemsRes,
-    refetch: refetchCart,
+    refetch: refetchCartQuery,
     isLoading: isCartLoading,
     dataUpdatedAt: cartUpdatedAt,
   } = useQuery(['cartItemsList', id], () => requests.getCartItemList({ sale_id: id, limit: 1000, offset: 0 }), {
@@ -222,6 +222,13 @@ export default function PosApp() {
       }
     },
   })
+
+  // react-query 3 hands back the request already in flight when refetch() is
+  // called during one, so a cart change that landed mid-fetch never reached the
+  // screen: two quick taps on the bag button, the second 137 ms after the first,
+  // left sale 601915's till one bag short for half an hour — and its UzQR asked
+  // for that short total. Drop the in-flight read and start one that sees it.
+  const refetchCart = useCallback(() => refetchCartQuery({ cancelRefetch: true }), [refetchCartQuery])
 
   const cartItems = get(cartItemsRes, 'data.data.data', [])
   const totalAmount = get(cartItemsRes, 'data.data.total_amount', 0)
@@ -729,6 +736,13 @@ export default function PosApp() {
 
   const [isCreatingNewSale, setIsCreatingNewSale] = useState(false)
 
+  // While a sale has a live UzQR its cart is locked server-side (409
+  // munis.qr.active) so the QR the customer holds can't drift from the cart.
+  const cartErrorText = (err, fallback) =>
+    get(err, 'response.data.data') === 'munis.qr.active'
+      ? t('pos.munis.cart_locked')
+      : get(err, 'response.data.message', fallback)
+
   const isSaleClosedError = (err) => {
     const code = get(err, 'response.data.code') || err?.response?.status
     const data = get(err, 'response.data.data')
@@ -881,7 +895,7 @@ export default function PosApp() {
           navigate(`/sales/create`)
           return
         }
-        error(get(err, 'response.data.message', t('pos.error_adding_product')))
+        error(cartErrorText(err, t('pos.error_adding_product')))
       },
     },
   )
@@ -953,7 +967,7 @@ export default function PosApp() {
           })
         }
         refetchCart()
-        error(get(err, 'response.data.message', t('pos.error_changing_quantity')))
+        error(cartErrorText(err, t('pos.error_changing_quantity')))
       },
     },
   )
@@ -970,7 +984,7 @@ export default function PosApp() {
           handleSaleClosedTransition()
           return
         }
-        error(t('pos.error_removing_product'))
+        error(cartErrorText(err, t('pos.error_removing_product')))
       },
     }
   )
@@ -992,7 +1006,7 @@ export default function PosApp() {
             return
           }
         }
-        error(t('pos.error_adding_discount_card'))
+        error(cartErrorText(err, t('pos.error_adding_discount_card')))
         console.error('err', err)
       },
     }
@@ -1015,7 +1029,7 @@ export default function PosApp() {
             return
           }
         }
-        error(t('pos.error_removing_discount_card'))
+        error(cartErrorText(err, t('pos.error_removing_discount_card')))
         console.error('err', err)
       },
     }
@@ -1246,6 +1260,31 @@ export default function PosApp() {
     }
   }, [])
 
+  // What the till collects besides the UzQR (cash, card, balance). Sent with the
+  // QR request so the server can refuse a QR this till's tenders don't cover.
+  const munisOtherAmount = paymentsList
+    .filter((p) => p.app_type !== 'munis')
+    .reduce((sum, p) => sum + Number(p.amount || 0), 0)
+
+  // Waits for in-flight cart writes, then reads the cart. null = couldn't (an
+  // error is already shown).
+  const readCartTotalForMunis = async () => {
+    const deadline = Date.now() + 5000
+    while (queryClient.isMutating() > 0) {
+      if (Date.now() > deadline) {
+        error(t('pos.munis.cart_busy'))
+        return null
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    const res = await refetchCart()
+    if (res?.isError || !res?.data) {
+      error(t('pos.munis.generate_failed'))
+      return null
+    }
+    return Number(get(res, 'data.data.data.total_amount', 0))
+  }
+
   const handleCheckout = async () => {
     if (blockedByMarking()) return
     if (!paymentsList.length) {
@@ -1300,6 +1339,20 @@ export default function PosApp() {
     // Munis: show a generated QR for the customer to scan, then finalize once paid.
     const hasMunisPayment = paymentsList.some((p) => p.type === 'app' && p.app_type === 'munis')
     if (hasMunisPayment) {
+      // The QR's amount is frozen once the customer has it, so it must be the
+      // cart as the SERVER has it now — not what this screen last read. Let any
+      // cart change still in flight land (the storno deletes just above too),
+      // read the cart fresh, and if the tenders no longer cover it (or the QR
+      // would exceed it), re-fill UzQR and stop so the cashier sees the new
+      // figure before the customer is shown a QR. Same rule the server applies.
+      const freshTotal = await readCartTotalForMunis()
+      if (freshTotal === null) return
+      const munisAmount = Number(secondaryPaymentAmount || 0)
+      if (munisAmount + munisOtherAmount < freshTotal - 0.01 || munisAmount > freshTotal + 0.01) {
+        setRawSecondaryPaymentAmount(String(Math.max(Math.round((freshTotal - munisOtherAmount) * 100) / 100, 0)))
+        error(t('pos.munis.total_changed'))
+        return
+      }
       setShowMunisQrModal(true)
       return
     }
@@ -2023,6 +2076,17 @@ export default function PosApp() {
 
   const handleCancelConfirm = async () => {
     setShowCancelConfirmation(false)
+    // A live UzQR locks the cart, so it goes first. One the customer has
+    // already paid is not cancelled from here — that goes through the UzQR
+    // window, where the cashier is shown the payment.
+    try {
+      await requests.cancelMunisQr({ sale_id: id })
+    } catch (e) {
+      if (get(e, 'response.data.data') === 'munis.qr.paid') {
+        error(t('pos.munis.cancel_paid_receipt'))
+        return
+      }
+    }
     setStornedIds(new Set()) // clear storno before deleting all items
     try {
       if (cartItems.length > 0) {
@@ -2633,8 +2697,9 @@ export default function PosApp() {
         open={showMunisQrModal}
         saleId={id}
         amount={Number(paymentsList.find((p) => p.app_type === 'munis')?.amount || 0)}
+        otherAmount={munisOtherAmount}
         onPaid={handleMunisPaid}
-        onCancel={() => { setShowMunisQrModal(false); clearPOSActionFocus() }}
+        onCancel={() => { setShowMunisQrModal(false); refetchCart(); clearPOSActionFocus() }}
         t={t}
       />
 

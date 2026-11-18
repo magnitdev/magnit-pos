@@ -75,6 +75,7 @@ export const requests = {
   addToOrderPayment: (data) => request.post(`v1/sale/final`, data),
   // Munis (QR Online): generate a per-sale dynamic QR, and poll payment status by sale id
   generateMunisQr: (data) => request.post(`v1/munis/qr`, data),
+  cancelMunisQr: (data) => request.post(`v1/munis/qr/cancel`, data),
   getMunisPayment: (filter) => request.get(`v1/munis/payment${qs.stringify(filter, { addQueryPrefix: true })}`),
   returnSaleItem: (data) => request.post(`v1/sale/return`, data),
   addDiscountCard: (data) => request.post(`v1/sale/discount-card`, data),

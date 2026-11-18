@@ -22,9 +22,18 @@ const PAID_DEVICE_MS = 4000
  *  2. Render the QR for the customer to scan and pay.
  *  3. Poll payment status by that bill_number until it lands (Munis code === 0).
  *  4. Once paid, call onPaid() which finalizes the sale (server re-verifies).
+ *
+ * While the QR is live the server locks the sale's cart, so Cancel must go
+ * through the server (it unlocks the cart). A QR the customer has already paid
+ * is not cancelled silently: the cashier is shown the payment and has to
+ * confirm. Money that arrived at a different amount than the QR asked for
+ * (the payer's app lets them edit it) is shown as such and never finalized.
  */
-function PosMunisQrModal({ open, saleId, amount, onPaid, onCancel, t }) {
-  const [status, setStatus] = useState('loading') // loading | waiting | paid | error
+function PosMunisQrModal({ open, saleId, amount, otherAmount, onPaid, onCancel, t }) {
+  const [status, setStatus] = useState('loading') // loading | waiting | paid | mismatch | error
+  const [mismatch, setMismatch] = useState(null) // { paid, expected } when the money differs
+  const [confirmForce, setConfirmForce] = useState(false) // cancel refused: already paid / unverifiable
+  const [cancelling, setCancelling] = useState(false)
   const [qr, setQr] = useState('')
   const [billNumber, setBillNumber] = useState('') // Munis receipt/bill number to poll with
   const [errMsg, setErrMsg] = useState('')
@@ -50,9 +59,11 @@ function PosMunisQrModal({ open, saleId, amount, onPaid, onCancel, t }) {
     setQr('')
     setBillNumber('')
     setErrMsg('')
+    setMismatch(null)
+    setConfirmForce(false)
 
     requests
-      .generateMunisQr({ sale_id: saleId, amount: Number(amount) })
+      .generateMunisQr({ sale_id: saleId, amount: Number(amount), other_amount: Number(otherAmount || 0) })
       .then((res) => {
         if (cancelled) return
         const qrValue = get(res, 'data.data.qr', '')
@@ -69,17 +80,13 @@ function PosMunisQrModal({ open, saleId, amount, onPaid, onCancel, t }) {
       .catch((e) => {
         if (cancelled) return
         setStatus('error')
-        setErrMsg(
-          get(e, 'response.data.data') ||
-            get(e, 'response.data.message') ||
-            t('pos.munis.generate_failed'),
-        )
+        setErrMsg(munisErrorText(e))
       })
 
     return () => {
       cancelled = true
     }
-  }, [open, saleId, amount, retryNonce])
+  }, [open, saleId, amount, otherAmount, retryNonce])
 
   // The modal stays mounted between sales, so clear the finished sale's state
   // on close — a leftover status === 'paid' would otherwise auto-fire onPaid()
@@ -92,6 +99,9 @@ function PosMunisQrModal({ open, saleId, amount, onPaid, onCancel, t }) {
     setQr('')
     setBillNumber('')
     setErrMsg('')
+    setMismatch(null)
+    setConfirmForce(false)
+    setCancelling(false)
   }, [open])
 
   // Poll for payment while waiting
@@ -103,9 +113,18 @@ function PosMunisQrModal({ open, saleId, amount, onPaid, onCancel, t }) {
       try {
         const res = await requests.getMunisPayment({ bill_number: billNumber })
         const code = get(res, 'data.data.code')
-        if (!stopped && code === 0) {
-          setStatus('paid')
+        if (stopped || code !== 0) return
+        // amount_matches is absent for a QR the server has no record of
+        // (issued before it kept them) — only an explicit false stops here.
+        if (get(res, 'data.data.amount_matches') === false) {
+          setMismatch({
+            paid: Number(get(res, 'data.data.paid_amount', 0)),
+            expected: Number(get(res, 'data.data.expected_amount', 0)),
+          })
+          setStatus('mismatch')
+          return
         }
+        setStatus('paid')
       } catch {
         // ignore transient poll errors; keep polling
       }
@@ -202,6 +221,41 @@ function PosMunisQrModal({ open, saleId, amount, onPaid, onCancel, t }) {
     }
   }, [open, status])
 
+  function munisErrorText(e) {
+    const key = get(e, 'response.data.data')
+    const known = {
+      'munis.amount.stale': 'pos.munis.amount_stale',
+      'munis.qr.paid': 'pos.munis.qr_paid',
+      'munis.amount.invalid': 'pos.munis.amount_invalid',
+      'munis.unavailable': 'pos.munis.unavailable',
+    }
+    if (known[key]) return t(known[key])
+    return key || get(e, 'response.data.message') || t('pos.munis.generate_failed')
+  }
+
+  // Cancel retires the QR on the server, which unlocks the cart. If Munis says
+  // the customer has already paid (or can't be asked), the cashier is asked to
+  // confirm before the payment is walked away from.
+  const handleCancel = async (force = false) => {
+    if (cancelling) return
+    setCancelling(true)
+    try {
+      await requests.cancelMunisQr({ sale_id: saleId, force })
+      onCancel()
+    } catch (e) {
+      const key = get(e, 'response.data.data')
+      if (!force && (key === 'munis.qr.paid' || key === 'munis.unavailable')) {
+        setConfirmForce(true)
+        setErrMsg(munisErrorText(e))
+      } else {
+        setErrMsg(munisErrorText(e))
+        setStatus('error')
+      }
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   if (!open) return null
 
   return (
@@ -257,13 +311,33 @@ function PosMunisQrModal({ open, saleId, amount, onPaid, onCancel, t }) {
           </div>
         )}
 
-        {status === 'error' && <div className='pos-app-scan-desc' style={{ color: '#e23a32' }}>{errMsg}</div>}
+        {status === 'mismatch' && mismatch && (
+          <div className='pos-app-scan-desc' style={{ color: '#e23a32' }}>
+            {t('pos.munis.amount_mismatch', {
+              paid: thousandDivider(mismatch.paid, t('pos.currency_short')),
+              expected: thousandDivider(mismatch.expected, t('pos.currency_short')),
+            })}
+          </div>
+        )}
+
+        {status === 'error' && !confirmForce && <div className='pos-app-scan-desc' style={{ color: '#e23a32' }}>{errMsg}</div>}
+
+        {confirmForce && (
+          <div className='pos-app-scan-desc' style={{ color: '#e23a32' }}>
+            {errMsg} {t('pos.munis.cancel_anyway_hint')}
+          </div>
+        )}
 
         <div className='pos-security-actions'>
-          <button type='button' onClick={onCancel} className='pos-security-btn-cancel'>
+          <button type='button' onClick={() => handleCancel(false)} disabled={cancelling} className='pos-security-btn-cancel'>
             {t('pos.security.cancel')}
           </button>
-          {status === 'error' && (
+          {confirmForce && (
+            <button type='button' onClick={() => handleCancel(true)} disabled={cancelling} className='pos-app-scan-btn-confirm'>
+              {t('pos.munis.cancel_anyway')}
+            </button>
+          )}
+          {status === 'error' && !confirmForce && (
             <button
               type='button'
               onClick={() => setRetryNonce((n) => n + 1)}
