@@ -11,15 +11,36 @@ import { useTranslation } from 'react-i18next'
 
 // What actually came off this line, for the fiscal receipt.
 //
-// An N+X give-away (Акция N+X) is the EXACT line figure the backend recorded, so
-// it is taken as-is. discount_amount carries the same money divided by the line's
-// packs — the shape every other consumer of that field expects — and multiplying
-// it back out leaves a few tiyin against the total the sale was really charged
-// (3 free of 7 at 10 000 reconstructs as 29 999.97).
+// line_discount_amount is the line's discount exactly as the server charged it
+// (cart_items.discount_amount) — the figure the sale total, and so the tendered
+// sum, is made of. EPOS refuses a receipt unless Σ(price − discount − other)
+// equals what was received to the tiyin, so it is taken as-is.
+//
+// A server that predates the field gets the old reconstruction. An N+X give-away
+// (Акция N+X) is the EXACT line figure the backend recorded, so it is taken as-is.
+// discount_amount carries the same money divided by the line's packs — the shape
+// every other consumer of that field expects — and multiplying it back out leaves
+// a few tiyin against the total the sale was really charged (3 free of 7 at
+// 10 000 reconstructs as 29 999.97; a 5% card on 0.783 kg at 48 694.24 as
+// 1 906.3701 against 1 906.38 charged).
+const hasStoredLineDiscount = (el) => el?.line_discount_amount != null && Number.isFinite(Number(el.line_discount_amount))
+
 const fiscalLineDiscount = (el) => {
+  if (hasStoredLineDiscount(el)) return Number(el.line_discount_amount)
   const nx = Number(el?.nx_discount_amount) || 0
   if (nx > 0) return nx
   return get(el, 'discount_amount') * el.quantity + el.discount_unit_amount * el.unit_quantity
+}
+
+// The quantity EPOS registers, in thousandths of a pack (1000 = 1 pack / 1 kg).
+// Computed from the line's whole units so it is an integer: the old
+// (quantity + unit_amount) * 1000 is floating point, and from a kilogram up it is
+// not always whole (1.001 kg came out as 1000.9999999999999), which the bridge
+// truncates — a gram short on the receipt.
+const fiscalAmount = (packs, units, unitPerPack, unitAmount) => {
+  const upp = Number(unitPerPack)
+  if (!(upp > 0)) return Math.round(((Number(packs) || 0) + (Number(unitAmount) || 0)) * 1000)
+  return Math.round((((Number(packs) || 0) * upp + (Number(units) || 0)) * 1000) / upp)
 }
 
 
@@ -506,7 +527,7 @@ export const useSaleOperations = ({
         readyData.push({
           barcode: finals.find((final) => final.cart_item_id === el.id)?.barcode || el.barcode,
 
-          amount: (el.quantity + el.unit_amount) * 1000,
+          amount: fiscalAmount(el.quantity, el.unit_quantity, el.unit_per_pack, el.unit_amount),
           price: parseFloat((price * 100).toFixed(2)),
           discount: discountSum,
           vatPercent: get(el, 'vat_percent'),
@@ -537,7 +558,7 @@ export const useSaleOperations = ({
         const other = parseFloat((otherSum * 100).toFixed(2))
         readyData.push({
           barcode: finals.find((final) => final.cart_item_id === el.id)?.barcode || el.barcode,
-          amount: (el.quantity + el.unit_amount) * 1000,
+          amount: fiscalAmount(el.quantity, el.unit_quantity, el.unit_per_pack, el.unit_amount),
           price: parseFloat((price * 100).toFixed(2)),
           discount: discountSum,
           vatPercent: get(el, 'vat_percent'),
@@ -550,7 +571,15 @@ export const useSaleOperations = ({
           ownerType: 0,
         })
       } else {
-        Object.values(slots).map((marking, index) => {
+        // With the stored line discount the split spreads THAT figure over the
+        // slots by value, in tiyin, the last slot taking what is left — so Σ over
+        // the slots is exactly the discount the sale was charged.
+        const slotList = Object.values(slots)
+        const storedDiscount = hasStoredLineDiscount(el)
+        const lineDiscountTiyin = Math.round(fiscalLineDiscount(el) * 100)
+        const lineTotalTiyin = Math.round(el.total_price * 100)
+        let discountLeftTiyin = lineDiscountTiyin
+        slotList.map((marking, index) => {
           // The remainder slot takes whatever is left of the line rather than
           // recomputing from unit_quantity_price, which the backend rounds to
           // two decimals. Subtracting makes Σ over the split ≡ total_price by
@@ -578,16 +607,29 @@ export const useSaleOperations = ({
           // recomputing. With no N+X this is the per-pack figure it always was.
           const nxGiveAway = Number(el?.nx_discount_amount) || 0
           const perPackDiscount = get(el, 'discount_amount')
-          const discount = el.quantity > index
-            ? nxGiveAway > 0 && index === el.quantity - 1
-              ? nxGiveAway - perPackDiscount * (el.quantity - 1)
-              : perPackDiscount
-            : el.discount_unit_amount * el.unit_quantity
+          let discount
+          if (storedDiscount) {
+            const share =
+              index === slotList.length - 1
+                ? discountLeftTiyin
+                : lineTotalTiyin > 0
+                  ? Math.round((lineDiscountTiyin * Math.round(price * 100)) / lineTotalTiyin)
+                  : 0
+            const slotDiscountTiyin = Math.min(Math.max(share, 0), discountLeftTiyin)
+            discountLeftTiyin -= slotDiscountTiyin
+            discount = slotDiscountTiyin / 100
+          } else {
+            discount = el.quantity > index
+              ? nxGiveAway > 0 && index === el.quantity - 1
+                ? nxGiveAway - perPackDiscount * (el.quantity - 1)
+                : perPackDiscount
+              : el.discount_unit_amount * el.unit_quantity
+          }
           const discountSum = parseFloat((discount * 100).toFixed(2))
 
           readyData.push({
             barcode: finals.find((final) => final.cart_item_id === el.id)?.barcode || el.barcode,
-            amount: el.quantity > index ? (el.quantity / el.quantity) * 1000 : el.unit_amount * 1000,
+            amount: el.quantity > index ? (el.quantity / el.quantity) * 1000 : fiscalAmount(0, el.unit_quantity, el.unit_per_pack, el.unit_amount),
             price: parseFloat((price * 100).toFixed(2)),
 
             discount: discountSum,
