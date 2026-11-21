@@ -117,7 +117,7 @@ export default function ActionBar({
           <button
             className={`method-select-btn ${secondaryPaymentMethod === 'uzum' ? 'is-active' : ''}`}
             onClick={() => { onSelectSecondaryPayment('uzum'); blurActiveBtn() }}
-            disabled={(shouldDisableInactive && secondaryPaymentMethod !== 'uzum') || Boolean(secondaryPaymentMethod && secondaryPaymentMethod !== 'uzum') || isMethodBlocked('uzum')}
+            disabled
             type='button'
           >
             <img src="/uzum.png" alt="Uzum" className="payment-icon" />
